@@ -1,3 +1,4 @@
+from requests.models import HTTPError
 import urllib3
 from urllib.parse import urljoin
 import requests
@@ -6,34 +7,33 @@ from pathvalidate import sanitize_filename
 from os import path
 from pathlib import Path
 import argparse
+import random
+from sys import stderr
 
 
 def extract_img_link(soup, response):
-    response.raise_for_status()
     img_src = soup.find('div', class_='bookimage').find('img')['src']
     img_src = urljoin(response.url, img_src)
     return img_src
 
 
-def check_for_redirect(response, n):
-    """Функция проверяет сколько перенаправлений (редиректов) по URL было
-       совершено.
+def check_for_redirect(response, n=0):
+    """Проверка количества перенаправлений (редиректов) по URL.
+
     Args:
         response (requests): экземпляр request для проверки на редиректы.
         n (int): количество редиректов для проверки.
 
     Returns:
-        boolean: было ли количество рекдиректов хотя бы n раз.
+        boolean: было ли количество редиректов хотя бы n+1 раз.
     """
-    if len(response.history) > n:
-        return True
-    else:
-        return False
+    return len(response.history) > n
 
 
 def get_book_name(soup):
-    """Функция получает название и имя автора книги из объекта BeautifulSoup
+    """Получение названия и имени автора книги из объекта BeautifulSoup
        ("HTML-супа").
+
     Args:
         soup (BeautifulSoup): объект BeautifulSoup с HTML-кодом
                               страницы tululu.org.
@@ -49,8 +49,11 @@ def get_book_name(soup):
     return book_title, book_author
 
 
-def download_txt(response, filename, folder='books/'):
-    """Функция для скачивания текстовых файлов.
+def download_txt_from_response(response, filename, folder='books/'):
+    """Загрузка текстовых файлов книг.
+
+    Ссылки на файлы извлекаются из объекта response.
+
     Args:
         response (requests): экземпляр request страницы с ссылкой на текст,
                              который нужно скачать.
@@ -62,15 +65,15 @@ def download_txt(response, filename, folder='books/'):
     """
     Path(folder).mkdir(parents=True, exist_ok=True)
     filename = f'{sanitize_filename(filename)}.txt'
-
-    response.raise_for_status()
-    with open(f'{path.join(folder, filename)}', 'wb') as file:
+    file_path = path.join(folder, filename)
+    with open(f'{file_path}', 'wb') as file:
         file.write(response.content)
-        return path.join(folder, filename)
+    return file_path
 
 
 def download_image(img_url, folder='images/'):
-    """Функция для скачивания картинок обложек книг.
+    """Загрузка картинок обложек книг.
+
     Args:
         img_url (str): Cсылка на картинку, которую нужно скачать.
         folder (str): Папка, куда сохранять.
@@ -89,8 +92,10 @@ def download_image(img_url, folder='images/'):
 
 
 def parse_book_page(soup):
-    """Функция для разбора (парсинга) информации о книге на
-       сайте tululu.org. Функция получает название книги, имя
+    """Разбор (парсинг) информации о книге на сайте
+       tululu.org.
+
+       Функция получает название книги, имя
        автора книги, отзывы по книге, список жанров книги.
 
     Args:
@@ -110,42 +115,96 @@ def parse_book_page(soup):
 
 
 def main():
-    description_1 = "Программа показывает информацию о запрашиваемых книгах,"
-    description_2 = "скачивает их и их обложки."
     parser = argparse.ArgumentParser(
-        description=f"{description_1} {description_2}"
+        description="""Программа показывает информацию о запрашиваемых книгах,
+        скачивает их и их обложки."""
         )
-    parser.add_argument('start_id', help='Стартовый идентификатор книги')
-    parser.add_argument('end_id', help='Крайний идентификатор книги')
+    rand_id_start = random.randint(1, 10001)
+    rand_id_end = random.randint(rand_id_start, 10001)
+    parser.add_argument('start_id', help='Начальный индекс книги',
+                        default=rand_id_start, nargs='?', type=int)
+    parser.add_argument('end_id', help='Конечный индекс книги',
+                        default=rand_id_end, nargs='?', type=int)
     args = parser.parse_args()
+    args.start_id = args.start_id
+    args.end_id = args.end_id
+    if args.start_id > args.end_id:
+        args.end_id = random.randint(args.start_id, 10001)
 
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    url_title = 'https://tululu.org/b'
-    url_dl = 'https://tululu.org/txt.php?id='
+    base_url = 'https://tululu.org/b'
+    dl_url = 'https://tululu.org/txt.php?id='
 
-    book_ids = [id for id in range(int(args.start_id), int(args.end_id)+1)
-                if not check_for_redirect(
-        requests.get(f"{url_title}{id}", verify=False), 1)]
+    print(f"Стартовый индекс книги: {args.start_id}")
+    print(f"Конечный индекс книги: {args.end_id}")
+    print()
+    book_ids = []
+    for book_id in range(args.start_id, args.end_id+1):
+        print(f"Обрабатываю индекс книги {book_id} для получения информации по книге...")
+        print("\033[0J")
+        print("\033[3A")
+        if not check_for_redirect(requests.get(f"{base_url}{book_id}",
+                                  verify=False), 1):
+            book_ids.append(book_id)
+        else:
+            print("\033[2A")
+            print("\033[0J")
+            stderr.write(f"Книга с индексом {book_id} отсутствует. Ошибка 404.\n\n")
+    print("\033[0J")
+    print("\033[2A")
 
-    book_ids = [id for id in book_ids if not check_for_redirect(
-        requests.get(f"{url_dl}{id}", verify=False), 0)]
+    for book_id in book_ids:
+        print(f"Обрабатываю индекс книги {book_id} для загрузки текста книги...")
+        print("\033[0J")
+        print("\033[3A")
+        if check_for_redirect(requests.get(f"{dl_url}{book_id}",
+                              verify=False)):
+            book_ids.remove(book_id)
+            print("\033[2A")
+            print("\033[0J")
+            stderr.write(f"Книга с индексом {book_id} не может быть скачана. Ошибка 302.\n\n")
 
-    for id in book_ids:
-        response_cover = requests.get(f"{url_title}{id}",
+    print("\033[2A")
+    print("\033[0J")
+    print("Загружаю книги...\n")
+    for book_id in book_ids:
+        response_cover = requests.get(f"{base_url}{book_id}",
                                       verify=False)
-        response_dl = requests.get(f"{url_dl}{id}",
+        try:
+            response_cover.raise_for_status()
+        except HTTPError:
+            print(f"""Не удалось пропарсить книгу (индекс {book_id}) из-за ошибки
+                      HTTP. Это не отменяет попытку скачивания книги.""")
+
+        response_dl = requests.get(f"{dl_url}{book_id}",
                                    verify=False)
+
+        if check_for_redirect(response_cover, 1):
+            print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю
+                      парсинг книги.""")
+
+        try:
+            response_dl.raise_for_status()
+        except HTTPError:
+            print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки
+                         HTTP.""")
+
+        if check_for_redirect(response_dl, 1):
+            print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю
+                      скачивание книги.""")
+
         soup = BeautifulSoup(response_cover.text, 'lxml')
         book_dict = parse_book_page(soup)
         img_url = extract_img_link(soup, response_cover)
+        print(f"Индекс {book_id}")
         print(f"Заголовок: {book_dict['Book name']}")
         print(book_dict['Genres'])
         for feedback in book_dict['Feedbacks']:
             feedback = feedback.find('span', class_='black')
             print(feedback.getText())
         print()
-        download_txt(response_dl,
-                     f'{id}. {book_dict["Book name"]}')
+        download_txt_from_response(response_dl,
+                     f'{book_id}. {book_dict["Book name"]}')
         download_image(img_url)
 
 
