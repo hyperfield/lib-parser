@@ -1,19 +1,18 @@
 from requests.models import HTTPError
 import urllib3
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, unquote
 import requests
 from bs4 import BeautifulSoup
 from pathvalidate import sanitize_filename
 from os import path
 from pathlib import Path
 import argparse
-import random
 from sys import stderr
 
 
-def extract_img_link(soup, response):
+def extract_img_link(soup, url):
     img_src = soup.find('div', class_='bookimage').find('img')['src']
-    img_src = urljoin(response.url, img_src)
+    img_src = urljoin(url, img_src)
     return img_src
 
 
@@ -49,7 +48,7 @@ def get_book_name(soup):
     return book_title, book_author
 
 
-def download_txt_from_response(response, filename, folder='books/'):
+def write_txt_from_response(response, filename, folder='books/'):
     """Загрузка текстовых файлов книг.
 
     Ссылки на файлы извлекаются из объекта response.
@@ -66,8 +65,8 @@ def download_txt_from_response(response, filename, folder='books/'):
     Path(folder).mkdir(parents=True, exist_ok=True)
     filename = f'{sanitize_filename(filename)}.txt'
     file_path = path.join(folder, filename)
-    with open(f'{file_path}', 'wb') as file:
-        file.write(response.content)
+    with open(f'{file_path}', 'w') as file:
+        file.write(response.text)
     return file_path
 
 
@@ -82,7 +81,7 @@ def download_image(img_url, folder='images/'):
         str: Путь до файла, куда сохранён текст.
     """
     Path(folder).mkdir(parents=True, exist_ok=True)
-    filename = img_url.split("/")[-1]
+    filename = unquote(urlsplit(img_url).path.split('/')[-1])
 
     response_img = requests.get(img_url, verify=False)
     response_img.raise_for_status()
@@ -108,6 +107,8 @@ def parse_book_page(soup):
     """
     book_name, book_author = get_book_name(soup)
     feedbacks = soup.find_all('div', class_='texts')
+    for i in range(len(feedbacks)):
+        feedbacks[i] = feedbacks[i].find('span', class_='black')
     genres = soup.find('span', class_='d_book').find_all('a')
     genres_clean = [genre.find(text=True) for genre in genres]
     return {"Book name": book_name, "Book author": book_author,
@@ -119,21 +120,15 @@ def main():
         description="""Программа показывает информацию о запрашиваемых книгах,
         скачивает их и их обложки."""
         )
-    rand_id_start = random.randint(1, 10001)
-    rand_id_end = random.randint(rand_id_start, 10001)
     parser.add_argument('start_id', help='Начальный индекс книги',
-                        default=rand_id_start, nargs='?', type=int)
+                        default=1, nargs='?', type=int)
     parser.add_argument('end_id', help='Конечный индекс книги',
-                        default=rand_id_end, nargs='?', type=int)
+                        default=100, nargs='?', type=int)
     args = parser.parse_args()
-    args.start_id = args.start_id
-    args.end_id = args.end_id
-    if args.start_id > args.end_id:
-        args.end_id = random.randint(args.start_id, 10001)
 
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     base_url = 'https://tululu.org/b'
-    dl_url = 'https://tululu.org/txt.php?id='
+    download_url = 'https://tululu.org/txt.php?id='
 
     print(f"Стартовый индекс книги: {args.start_id}")
     print(f"Конечный индекс книги: {args.end_id}")
@@ -157,7 +152,7 @@ def main():
         print(f"Обрабатываю индекс книги {book_id} для загрузки текста книги...")
         print("\033[0J")
         print("\033[3A")
-        if check_for_redirect(requests.get(f"{dl_url}{book_id}",
+        if check_for_redirect(requests.get(f"{download_url}{book_id}",
                               verify=False)):
             book_ids.remove(book_id)
             print("\033[2A")
@@ -168,43 +163,42 @@ def main():
     print("\033[0J")
     print("Загружаю книги...\n")
     for book_id in book_ids:
-        response_cover = requests.get(f"{base_url}{book_id}",
+        cover_response = requests.get(f"{base_url}{book_id}",
                                       verify=False)
         try:
-            response_cover.raise_for_status()
+            cover_response.raise_for_status()
         except HTTPError:
             print(f"""Не удалось пропарсить книгу (индекс {book_id}) из-за ошибки
                       HTTP. Это не отменяет попытку скачивания книги.""")
 
-        response_dl = requests.get(f"{dl_url}{book_id}",
-                                   verify=False)
+        download_response = requests.get(f"{download_url}{book_id}",
+                                         verify=False)
 
-        if check_for_redirect(response_cover, 1):
+        if check_for_redirect(cover_response, 1):
             print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю
                       парсинг книги.""")
 
         try:
-            response_dl.raise_for_status()
+            download_response.raise_for_status()
         except HTTPError:
             print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки
                          HTTP.""")
 
-        if check_for_redirect(response_dl, 1):
+        if check_for_redirect(download_response, 1):
             print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю
                       скачивание книги.""")
 
-        soup = BeautifulSoup(response_cover.text, 'lxml')
-        book_dict = parse_book_page(soup)
-        img_url = extract_img_link(soup, response_cover)
+        soup = BeautifulSoup(cover_response.text, 'lxml')
+        book_info = parse_book_page(soup)
+        img_url = extract_img_link(soup, cover_response.url)
         print(f"Индекс {book_id}")
-        print(f"Заголовок: {book_dict['Book name']}")
-        print(book_dict['Genres'])
-        for feedback in book_dict['Feedbacks']:
-            feedback = feedback.find('span', class_='black')
+        print(f"Заголовок: {book_info['Book name']}")
+        print(book_info['Genres'])
+        for feedback in book_info['Feedbacks']:
             print(feedback.getText())
         print()
-        download_txt_from_response(response_dl,
-                     f'{book_id}. {book_dict["Book name"]}')
+        write_txt_from_response(download_response,
+                                f'{book_id}. {book_info["Book name"]}')
         download_image(img_url)
 
 
