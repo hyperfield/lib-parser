@@ -138,8 +138,9 @@ def main():
         print(f"Обрабатываю индекс книги {book_id} для получения информации по книге...")
         print("\033[0J")
         print("\033[3A")
-        if not check_for_redirect(requests.get(f"{base_url}{book_id}",
-                                  verify=False), 1):
+        request = requests.get(f"{base_url}{book_id}",
+                                  verify=False)
+        if not check_for_redirect(request, 1):
             book_ids.append(book_id)
         else:
             print("\033[2A")
