@@ -115,7 +115,7 @@ def parse_book_page(soup):
             "Feedbacks": feedbacks, "Genres": genres_clean}
 
 
-def main():
+def cli_arguments():
     parser = argparse.ArgumentParser(
         description="""Программа показывает информацию о запрашиваемых книгах,
         скачивает их и их обложки."""
@@ -124,8 +124,20 @@ def main():
                         default=1, nargs='?', type=int)
     parser.add_argument('end_id', help='Конечный индекс книги',
                         default=100, nargs='?', type=int)
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def display_book_info(book_id, book_info):
+    print(f"Индекс {book_id}")
+    print(f"Заголовок: {book_info['Book name']}")
+    print(book_info['Genres'])
+    for feedback in book_info['Feedbacks']:
+        print(feedback.getText())
+    print()
+
+
+def main():
+    args = cli_arguments()
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     base_url = 'https://tululu.org/b'
     download_url = 'https://tululu.org/txt.php?id='
@@ -139,22 +151,19 @@ def main():
     
     for book_id in range(args.start_id, args.end_id+1):
         print(f"Обрабатываю индекс книги {book_id} для получения информации по книге...")
-        print("\033[0J")
-        print("\033[3A")
+        print("\033[0J", "\033[3A", sep='\n', end='\n')
         cover_response = requests.get(f"{base_url}{book_id}",
                                   verify=False)
-        try:
-            cover_response.raise_for_status()
+        
+        if cover_response.ok:
             if not check_for_redirect(cover_response, 1):
                 book_ids.append(book_id)
                 cover_responses.append(cover_response)
             else:
-                print("\033[2A")
-                print("\033[0J")
+                print("\033[2A", "\033[0J", sep='\n', end='\n')
                 stderr.write(f"Книга с индексом {book_id} отсутствует. Ошибка 404.\n\n")
-            print("\033[0J")
-            print("\033[2A")
-        except HTTPError:
+            print("\033[0J", "\033[2A", sep='\n', end='\n')
+        else:
             stderr.write(f"Книга с индексом {book_id} не может быть скачана. Ошибка 302.\n\n")
 
     print("Загружаю книги...\n")
@@ -163,9 +172,7 @@ def main():
         download_response = requests.get(f"{download_url}{book_id}",
                                          verify=False)
 
-        try:
-            download_response.raise_for_status()
-        except HTTPError:
+        if not download_response.ok:
             print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки
                          HTTP.""")
 
@@ -173,17 +180,12 @@ def main():
             print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю скачивание книги.\n""")
             continue
 
-        soup = BeautifulSoup(cover_response.text, 'lxml')
-        book_info = parse_book_page(soup)
-        img_url = extract_img_link(soup, cover_response.url)
-        print(f"Индекс {book_id}")
-        print(f"Заголовок: {book_info['Book name']}")
-        print(book_info['Genres'])
-        for feedback in book_info['Feedbacks']:
-            print(feedback.getText())
-        print()
+        cover_soup = BeautifulSoup(cover_response.text, 'lxml')
+        book_info = parse_book_page(cover_soup)
+        display_book_info(book_id, book_info)
         write_txt_from_response(download_response,
                                 f'{book_id}. {book_info["Book name"]}')
+        img_url = extract_img_link(cover_soup, cover_response.url)
         download_image(img_url)
 
 
