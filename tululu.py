@@ -16,7 +16,7 @@ def extract_img_link(soup, url):
     return img_src
 
 
-def check_for_redirect(response, n=1):
+def check_for_redirect(response, n=0):
     """Проверка количества перенаправлений (редиректов) по URL.
 
     Args:
@@ -145,48 +145,37 @@ def main():
     print(f"Стартовый индекс книги: {args.start_id}")
     print(f"Конечный индекс книги: {args.end_id}")
     print()
-    book_ids = []
-    cover_responses = []
 
     
     for book_id in range(args.start_id, args.end_id+1):
         print(f"Обрабатываю индекс книги {book_id} для получения информации по книге...")
-        print("\033[0J", "\033[3A", sep='\n', end='\n')
-        cover_response = requests.get(f"{base_url}{book_id}",
-                                  verify=False)
+        book_response = requests.get(f"{base_url}{book_id}", verify=False)
         
-        if cover_response.ok:
-            if not check_for_redirect(cover_response, 1):
-                book_ids.append(book_id)
-                cover_responses.append(cover_response)
+        if book_response.ok:
+            if not check_for_redirect(book_response, 1):
+                print("Загружаю книгу...\n")
+                book_content_response = requests.get(f"{download_url}{book_id}", verify=False)
+                
+                if not book_content_response.ok:
+                    print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки
+                            HTTP.""")
+
+                if check_for_redirect(book_content_response, 0):
+                    print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю скачивание книги.\n""")
+                    continue
+
+                book_soup = BeautifulSoup(book_response.text, 'lxml')
+                book_info = parse_book_page(book_soup)
+                display_book_info(book_id, book_info)
+                write_txt_from_response(book_content_response,
+                                        f'{book_id}. {book_info["Book name"]}')
+                img_url = extract_img_link(book_soup, book_response.url)
+                download_image(img_url)
+
             else:
-                print("\033[2A", "\033[0J", sep='\n', end='\n')
                 stderr.write(f"Книга с индексом {book_id} отсутствует. Ошибка 404.\n\n")
-            print("\033[0J", "\033[2A", sep='\n', end='\n')
         else:
             stderr.write(f"Книга с индексом {book_id} не может быть скачана. Ошибка 302.\n\n")
-
-    print("Загружаю книги...\n")
-
-    for book_id, cover_response in zip(book_ids, cover_responses):
-        download_response = requests.get(f"{download_url}{book_id}",
-                                         verify=False)
-
-        if not download_response.ok:
-            print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки
-                         HTTP.""")
-
-        if check_for_redirect(download_response, 0):
-            print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю скачивание книги.\n""")
-            continue
-
-        cover_soup = BeautifulSoup(cover_response.text, 'lxml')
-        book_info = parse_book_page(cover_soup)
-        display_book_info(book_id, book_info)
-        write_txt_from_response(download_response,
-                                f'{book_id}. {book_info["Book name"]}')
-        img_url = extract_img_link(cover_soup, cover_response.url)
-        download_image(img_url)
 
 
 if __name__ == '__main__':
