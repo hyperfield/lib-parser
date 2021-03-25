@@ -106,13 +106,14 @@ def parse_book_page(soup):
               отзывами по книге, список жанров книги.
     """
     book_name, book_author = get_book_name(soup)
-    feedbacks = soup.find_all('div', class_='texts')
-    for i in range(len(feedbacks)):
-        feedbacks[i] = feedbacks[i].find('span', class_='black')
+    feedbacks_div = soup.find_all('div', class_='texts')
+    feedbacks_span = [feedback.find('span', class_='black') for feedback in feedbacks_div]
     genres = soup.find('span', class_='d_book').find_all('a')
     genres_clean = [genre.find(text=True) for genre in genres]
-    return {"Book name": book_name, "Book author": book_author,
-            "Feedbacks": feedbacks, "Genres": genres_clean}
+    return {"Book name": book_name,
+            "Book author": book_author,
+            "Feedbacks": feedbacks_span,
+            "Genres": genres_clean}
 
 
 def cli_arguments():
@@ -146,16 +147,15 @@ def main():
     print(f"Конечный индекс книги: {args.end_id}")
     print()
 
-    
     for book_id in range(args.start_id, args.end_id+1):
         print(f"Обрабатываю индекс книги {book_id} для получения информации по книге...")
         book_response = requests.get(f"{base_url}{book_id}", verify=False)
-        
+
         if book_response.ok:
             if not check_for_redirect(book_response, 1):
                 print("Загружаю книгу...\n")
                 book_content_response = requests.get(f"{download_url}{book_id}", verify=False)
-                
+
                 if not book_content_response.ok:
                     print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки
                             HTTP.""")
