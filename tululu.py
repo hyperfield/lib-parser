@@ -1,19 +1,20 @@
+import argparse
 from requests.models import HTTPError
-import urllib3
-from urllib.parse import urljoin, urlsplit, unquote
-import requests
-from bs4 import BeautifulSoup
-from pathvalidate import sanitize_filename
 from os import path
 from pathlib import Path
-import argparse
+import requests
 from sys import stderr
+import urllib3
+from urllib.parse import urljoin, urlsplit, unquote
+
+from bs4 import BeautifulSoup
+from pathvalidate import sanitize_filename
 
 
 def extract_img_link(soup, url):
-    img_src = soup.find('div', class_='bookimage').find('img')['src']
-    img_src = urljoin(url, img_src)
-    return img_src
+    img_src_filename = soup.find('div', class_='bookimage').find('img')['src']
+    img_src_url = urljoin(url, img_src_filename)
+    return img_src_url
 
 
 def check_for_redirect(response, n=0):
@@ -48,7 +49,7 @@ def get_book_name(soup):
     return book_title, book_author
 
 
-def write_txt_from_response(response, filename, folder='books/'):
+def write_file_from_response_txt(response_text, filename, folder='books/'):
     """Загрузка текстовых файлов книг.
 
     Ссылки на файлы извлекаются из объекта response.
@@ -66,7 +67,7 @@ def write_txt_from_response(response, filename, folder='books/'):
     filename = f'{sanitize_filename(filename)}.txt'
     file_path = path.join(folder, filename)
     with open(f'{file_path}', 'w') as file:
-        file.write(response.text)
+        file.write(response_text)
     return file_path
 
 
@@ -81,13 +82,13 @@ def download_image(img_url, folder='images/'):
         str: Путь до файла, куда сохранён текст.
     """
     Path(folder).mkdir(parents=True, exist_ok=True)
-    filename = unquote(urlsplit(img_url).path.split('/')[-1])
-
+    relative_img_path = urlsplit(img_url).path
+    filename = unquote(relative_img_path.split('/')[-1])
     response_img = requests.get(img_url, verify=False)
     response_img.raise_for_status()
     with open(f'{path.join(folder, f"{filename}")}', 'wb') as file:
         file.write(response_img.content)
-    return path.join(folder, f'{filename}')
+    return path.join(folder, filename)
 
 
 def parse_book_page(soup):
@@ -109,14 +110,14 @@ def parse_book_page(soup):
     feedbacks_div = soup.find_all('div', class_='texts')
     feedbacks_span = [feedback.find('span', class_='black') for feedback in feedbacks_div]
     genres = soup.find('span', class_='d_book').find_all('a')
-    genres_clean = [genre.find(text=True) for genre in genres]
+    cleaned_genres = [genre.find(text=True) for genre in genres]
     return {"Book name": book_name,
             "Book author": book_author,
             "Feedbacks": feedbacks_span,
-            "Genres": genres_clean}
+            "Genres": cleaned_genres}
 
 
-def cli_arguments():
+def set_cli_arguments():
     parser = argparse.ArgumentParser(
         description="""Программа показывает информацию о запрашиваемых книгах,
         скачивает их и их обложки."""
@@ -138,7 +139,7 @@ def display_book_info(book_id, book_info):
 
 
 def main():
-    args = cli_arguments()
+    args = set_cli_arguments()
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     base_url = 'https://tululu.org/b'
     download_url = 'https://tululu.org/txt.php?id='
@@ -151,31 +152,33 @@ def main():
         print(f"Обрабатываю индекс книги {book_id} для получения информации по книге...")
         book_response = requests.get(f"{base_url}{book_id}", verify=False)
 
-        if book_response.ok:
-            if not check_for_redirect(book_response, 1):
-                print("Загружаю книгу...\n")
-                book_content_response = requests.get(f"{download_url}{book_id}", verify=False)
-
-                if not book_content_response.ok:
-                    print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки
-                            HTTP.""")
-
-                if check_for_redirect(book_content_response, 0):
-                    print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю скачивание книги.\n""")
-                    continue
-
-                book_soup = BeautifulSoup(book_response.text, 'lxml')
-                book_info = parse_book_page(book_soup)
-                display_book_info(book_id, book_info)
-                write_txt_from_response(book_content_response,
-                                        f'{book_id}. {book_info["Book name"]}')
-                img_url = extract_img_link(book_soup, book_response.url)
-                download_image(img_url)
-
-            else:
-                stderr.write(f"Книга с индексом {book_id} отсутствует. Ошибка 404.\n\n")
-        else:
+        if not book_response.ok:
             stderr.write(f"Книга с индексом {book_id} не может быть скачана. Ошибка 302.\n\n")
+            continue
+
+        if check_for_redirect(book_response, 1):
+            stderr.write(f"Книга с индексом {book_id} отсутствует. Ошибка 404.\n\n")
+            continue
+
+        print("Загружаю книгу...\n")
+        book_content_response = requests.get(f"{download_url}{book_id}",
+                                                verify=False)
+
+        if not book_content_response.ok:
+            print(f"""Не удалось скачать книгу (индекс {book_id}) из-за ошибки HTTP.""")
+            continue
+
+        if check_for_redirect(book_content_response, 0):
+            print(f"""Перенаправление ссылки по книге с индексом {book_id}. Отменяю скачивание книги.\n""")
+            continue
+
+        book_soup = BeautifulSoup(book_response.text, 'lxml')
+        book_info = parse_book_page(book_soup)
+        display_book_info(book_id, book_info)
+        write_file_from_response_txt(book_content_response.text,
+                                     f'{book_id}. {book_info["Book name"]}')
+        img_url = extract_img_link(book_soup, book_response.url)
+        download_image(img_url)
 
 
 if __name__ == '__main__':
