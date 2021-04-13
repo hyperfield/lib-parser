@@ -12,9 +12,9 @@ from pathvalidate import sanitize_filename
 
 
 def extract_img_link(soup, url):
-    img_src_filename = soup.find('div', class_='bookimage').find('img')['src']
-    img_src_url = urljoin(url, img_src_filename)
-    return img_src_url
+    relative_img_uri = soup.find('div', class_='bookimage').find('img')['src']
+    absolute_img_src_url = urljoin(url, relative_img_uri)
+    return absolute_img_src_url
 
 
 def check_for_redirect(response, n=0):
@@ -49,7 +49,7 @@ def get_book_name(soup):
     return book_title, book_author
 
 
-def write_file_from_response_txt(response_text, filename, folder='books/'):
+def write_file_from_response(response, filename, folder='books/'):
     """Загрузка текстовых файлов книг.
 
     Ссылки на файлы извлекаются из объекта response.
@@ -67,7 +67,7 @@ def write_file_from_response_txt(response_text, filename, folder='books/'):
     filename = f'{sanitize_filename(filename)}.txt'
     file_path = path.join(folder, filename)
     with open(f'{file_path}', 'w') as file:
-        file.write(response_text)
+        file.write(response)
     return file_path
 
 
@@ -117,7 +117,7 @@ def parse_book_page(soup):
             "Genres": cleaned_genres}
 
 
-def set_cli_arguments():
+def parse_cli_arguments():
     parser = argparse.ArgumentParser(
         description="""Программа показывает информацию о запрашиваемых книгах,
         скачивает их и их обложки."""
@@ -139,7 +139,7 @@ def display_book_info(book_id, book_info):
 
 
 def main():
-    args = set_cli_arguments()
+    args = parse_cli_arguments()
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     base_url = 'https://tululu.org/b'
     download_url = 'https://tululu.org/txt.php?id='
@@ -175,7 +175,7 @@ def main():
         book_soup = BeautifulSoup(book_response.text, 'lxml')
         book_info = parse_book_page(book_soup)
         display_book_info(book_id, book_info)
-        write_file_from_response_txt(book_content_response.text,
+        write_file_from_response(book_content_response.text,
                                      f'{book_id}. {book_info["Book name"]}')
         img_url = extract_img_link(book_soup, book_response.url)
         download_image(img_url)
